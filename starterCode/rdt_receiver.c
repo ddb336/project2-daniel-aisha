@@ -14,7 +14,7 @@
 
 
 /*
- * You ar required to change the implementation to support
+ * You are required to change the implementation to support
  * window size greater than one.
  * In the currenlt implemenetation window size is one, hence we have
  * onlyt one send and receive packet
