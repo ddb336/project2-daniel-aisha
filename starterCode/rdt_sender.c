@@ -19,8 +19,9 @@
 #define RETRY  120 //milli second 
 #define WINDOW_SIZE 4
 
-int next_seqno=0;
-int send_base=0;
+int next_seqno = 0;
+int send_base = 0;
+int maxAck = 0;
 
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
@@ -39,12 +40,17 @@ void resend_packets(int sig)
         //Resend all packets range between 
         //sendBase and nextSeqNum
         VLOG(INFO, "Timout happend");
+
         for (size_t i = 0; i < packetsInWindow; i++)
         {
-            if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
-            ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-            {
-                error("sendto");
+            if (window[i]->hdr.seqno == maxAck) {
+                printf("Timeout sending packet %d\n",window[i]->hdr.seqno);
+                if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
+                (const struct sockaddr *)&serveraddr, serverlen) < 0)
+                {
+                    error("sendto");
+                }
+                next_seqno = maxAck + window[i]->hdr.data_size;
             }
         }
     }
@@ -85,7 +91,6 @@ void init_timer(int delay, void (*sig_handler)(int))
 int main (int argc, char **argv)
 {
     int portno, len;
-    int next_seqno;
     char *hostname;
     char buffer[DATA_SIZE];
     FILE *fp;
@@ -129,10 +134,15 @@ int main (int argc, char **argv)
     init_timer(RETRY, resend_packets);
     next_seqno = 0;
     bool atEof = false;
-    
+
     while (1)
     {
         send_base = next_seqno;
+
+        for (size_t i = 0; i < WINDOW_SIZE; i++)
+        {
+            window[i] = NULL;
+        }
 
         packetsInWindow = WINDOW_SIZE;
         for (size_t i = 0; i < WINDOW_SIZE; i++)
@@ -146,17 +156,17 @@ int main (int argc, char **argv)
                 break;
             }
 
-            next_seqno = next_seqno + len;
-
             sndpkt = make_packet(len);
             memcpy(sndpkt->data, buffer, len);
-            sndpkt->hdr.seqno = next_seqno - len;
+            sndpkt->hdr.seqno = next_seqno;
+
+            next_seqno = next_seqno + len;
 
             window[i] = sndpkt;
         }
         
-        int maxAck = 0;
         //Wait for ACK
+        maxAck = 0;
         do {
             /*
              * If the sendto is called for the first time, the system will
@@ -175,6 +185,7 @@ int main (int argc, char **argv)
             }
 
             start_timer();
+
             //ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
             //struct sockaddr *src_addr, socklen_t *addrlen);
             for (size_t i = 0; i < packetsInWindow; i++)
@@ -185,18 +196,25 @@ int main (int argc, char **argv)
                     error("recvfrom");
                 }
                 recvpkt = (tcp_packet *)buffer;
-                printf("%d is ackno\n", recvpkt->hdr.ackno);
+                
                 assert(get_data_size(recvpkt) <= DATA_SIZE);
                 if (recvpkt->hdr.ackno > maxAck) {
                     maxAck = recvpkt->hdr.ackno;
                 }
+                printf("%d is ackno, %d is maxack, ateof=%d\n", recvpkt->hdr.ackno, maxAck,atEof);
             }
             
             stop_timer();
             /* resend pack if dont recv ack */
-        } while (maxAck != next_seqno);
 
-        free(sndpkt);
+            printf("next_seqno: %d, maxack: %d\n", next_seqno, maxAck);
+        } while (maxAck != next_seqno && packetsInWindow > 0);
+
+        for (size_t i = 0; i < WINDOW_SIZE; i++)
+        {
+            free(window[i]);
+            window[i] = NULL;
+        }
 
         if (atEof) {
             VLOG(INFO, "End Of File has been reached");
