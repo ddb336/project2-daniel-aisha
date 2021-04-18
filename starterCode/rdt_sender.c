@@ -17,7 +17,7 @@
 
 #define STDIN_FD    0
 #define RETRY  120 //milli second 
-#define WINDOW_SIZE 4
+#define WINDOW_SIZE 10
 
 int next_seqno = 0;
 int send_base = 0;
@@ -50,7 +50,6 @@ void resend_packets(int sig)
                 {
                     error("sendto");
                 }
-                next_seqno = maxAck + window[i]->hdr.data_size;
             }
         }
     }
@@ -155,7 +154,7 @@ int main (int argc, char **argv)
                 packetsInWindow = i;
                 break;
             }
-
+            
             sndpkt = make_packet(len);
             memcpy(sndpkt->data, buffer, len);
             sndpkt->hdr.seqno = next_seqno;
@@ -164,9 +163,9 @@ int main (int argc, char **argv)
 
             window[i] = sndpkt;
         }
-        
+
         //Wait for ACK
-        maxAck = 0;
+        maxAck = -1;
         do {
             /*
              * If the sendto is called for the first time, the system will
@@ -175,12 +174,14 @@ int main (int argc, char **argv)
              */
             for (size_t i = 0; i < packetsInWindow; i++)
             {
-                VLOG(DEBUG, "Sending packet %d to %s", 
+                if (window[i]->hdr.seqno > maxAck) {
+                    VLOG(DEBUG, "Sending packet %d to %s", 
                     window[i]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
-                if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
-                ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-                {
-                    error("sendto");
+                    if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
+                    ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+                    {
+                        error("sendto");
+                    }
                 }
             }
 
@@ -190,24 +191,26 @@ int main (int argc, char **argv)
             //struct sockaddr *src_addr, socklen_t *addrlen);
             for (size_t i = 0; i < packetsInWindow; i++)
             {
-                if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
-                            (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
-                {
-                    error("recvfrom");
+                if (window[i]->hdr.seqno >= maxAck) {
+                    if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
+                                (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
+                    {
+                        error("recvfrom");
+                    }
+                    recvpkt = (tcp_packet *)buffer;
+                    
+                    assert(get_data_size(recvpkt) <= DATA_SIZE);
+
+                    if (recvpkt->hdr.ackno > maxAck) {
+                        maxAck = recvpkt->hdr.ackno;
+                    }
                 }
-                recvpkt = (tcp_packet *)buffer;
-                
-                assert(get_data_size(recvpkt) <= DATA_SIZE);
-                if (recvpkt->hdr.ackno > maxAck) {
-                    maxAck = recvpkt->hdr.ackno;
-                }
-                printf("%d is ackno, %d is maxack, ateof=%d\n", recvpkt->hdr.ackno, maxAck,atEof);
             }
             
             stop_timer();
             /* resend pack if dont recv ack */
 
-            printf("next_seqno: %d, maxack: %d\n", next_seqno, maxAck);
+            printf("next_seqno: %d, maxack: %d, packetsInWindow: %d\n", next_seqno, maxAck, packetsInWindow);
         } while (maxAck != next_seqno && packetsInWindow > 0);
 
         for (size_t i = 0; i < WINDOW_SIZE; i++)

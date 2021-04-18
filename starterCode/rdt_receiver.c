@@ -91,6 +91,7 @@ int main(int argc, char **argv) {
         /*
          * recvfrom: receive a UDP datagram from a client
          */
+
         //VLOG(DEBUG, "waiting from server \n");
         if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
                 (struct sockaddr *) &clientaddr, (socklen_t *)&clientlen) < 0) {
@@ -135,6 +136,8 @@ int main(int argc, char **argv) {
         rcv_base = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
         sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
         sndpkt->hdr.ctr_flags = ACK;
+
+        printf("Acknum: %d\n", sndpkt->hdr.ackno);
 
         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                 (struct sockaddr *) &clientaddr, clientlen) < 0) {
