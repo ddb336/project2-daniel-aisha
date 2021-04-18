@@ -103,9 +103,13 @@ int main(int argc, char **argv) {
         assert(get_data_size(recvpkt) <= DATA_SIZE);
 
         if (recvpkt->hdr.data_size == 0) {
-            //VLOG(INFO, "End Of File has been reached");
+            VLOG(INFO, "End Of File has been reached");
             fclose(fp);
             break;
+        }
+
+        if (recvpkt->hdr.seqno < rcv_base) {
+            continue;
         }
 
         if (recvpkt->hdr.seqno > rcv_base) {
@@ -133,7 +137,7 @@ int main(int argc, char **argv) {
         fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
 
         sndpkt = make_packet(0);
-        rcv_base = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
+        rcv_base = rcv_base + recvpkt->hdr.data_size;
         sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
         sndpkt->hdr.ctr_flags = ACK;
 
