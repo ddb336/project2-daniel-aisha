@@ -1,6 +1,7 @@
 enum packet_type {
     DATA,
     ACK,
+    END,
 };
 
 typedef struct {

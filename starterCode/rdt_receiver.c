@@ -87,6 +87,8 @@ int main(int argc, char **argv) {
 
     int rcv_base = 0;
 
+    printf("Waiting for files\n");
+
     while (1) {
         /*
          * recvfrom: receive a UDP datagram from a client
@@ -100,11 +102,30 @@ int main(int argc, char **argv) {
 
         recvpkt = (tcp_packet *) buffer;
 
+        if (get_data_size(recvpkt) > DATA_SIZE) {
+            printf("size: %d\n", get_data_size(recvpkt));
+            printf("seqno: %d, data size: %d\n", recvpkt->hdr.seqno, recvpkt->hdr.data_size);
+        }
+
         assert(get_data_size(recvpkt) <= DATA_SIZE);
 
         if (recvpkt->hdr.data_size == 0) {
             VLOG(INFO, "End Of File has been reached");
+
+            sndpkt = make_packet(0);
+            sndpkt->hdr.ackno = rcv_base;
+            sndpkt->hdr.ctr_flags = END;
+
+            for (size_t i = 0; i < 10; i++)
+            {
+                if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
+                    (struct sockaddr *) &clientaddr, clientlen) < 0) {
+                error("ERROR in sendto");
+            }
+            }
+
             fclose(fp);
+            close(sockfd);
             break;
         }
 

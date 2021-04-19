@@ -17,7 +17,7 @@
 
 #define STDIN_FD    0
 #define RETRY  120 //milli second 
-#define WINDOW_SIZE 50
+#define WINDOW_SIZE 10
 
 int next_seqno = 0;
 int send_base = 0;
@@ -40,20 +40,53 @@ int last_unacked_idx;
 tcp_packet* last_sent;
 int last_sent_idx;
 
+void print_window() {
+    for (size_t i = 0; i < WINDOW_SIZE; i++)
+    {
+        if (i == last_unacked_idx) {
+            printf("[X");
+        } else if (i == last_sent_idx) {
+            printf("[_");
+        } else {
+            printf("[");
+        }
+        if (window[i] == NULL) {
+            printf("NULL");
+        } else {
+            printf("%d",window[i]->hdr.seqno);
+        }
+        printf("]");
+    }
+    printf("\n");
+}
+
 void resend_packets(int sig)
 {
     if (sig == SIGALRM)
     {
         //Resend all packets range between 
         //sendBase and nextSeqNum
-        VLOG(INFO, "Timout happend");
+        if (last_unacked->hdr.ctr_flags != END) VLOG(INFO, "Timeout happened");
 
-        VLOG(DEBUG, "Sending packet %d to %s", 
-        last_unacked->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
+        // VLOG(DEBUG, "Retry sending packet %d to %s", 
+        //         last_unacked->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
         if(sendto(sockfd, last_unacked, TCP_HDR_SIZE + get_data_size(last_unacked), 0, 
         ( const struct sockaddr *)&serveraddr, serverlen) < 0)
         {
             error("sendto");
+        }
+
+        for (size_t i = (last_unacked_idx+1)%WINDOW_SIZE; i != (last_sent_idx+1)%WINDOW_SIZE; i = (i+1) % WINDOW_SIZE)
+        {
+            if (window[i] == NULL) continue;
+
+            VLOG(DEBUG, "Retry sending packet %d to %s\n", 
+                window[i]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
+            if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
+            ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+            {
+                error("sendto");
+            }
         }
     }
 }
@@ -96,20 +129,6 @@ int space_left(int last_unacked_idx, int last_sent_idx) {
     }
 }
 
-void print_window() {
-    for (size_t i = 0; i < WINDOW_SIZE; i++)
-    {
-        printf("[");
-        if (window[i] == NULL) {
-            printf("NULL");
-        } else {
-            printf("%d",window[i]->hdr.seqno);
-        }
-        printf("]");
-    }
-    printf("\n");
-}
-
 int main (int argc, char **argv)
 {
     int portno, len;
@@ -118,7 +137,7 @@ int main (int argc, char **argv)
 
     /* check command line arguments */
     if (argc != 4) {
-        fprintf(stderr,"usage: %s <hostname> <port> <FILE>\n", argv[0]);
+        //fprintf(stderr,"usage: %s <hostname> <port> <FILE>\n", argv[0]);
         exit(0);
     }
     hostname = argv[1];
@@ -192,11 +211,14 @@ int main (int argc, char **argv)
     last_sent = window[WINDOW_SIZE - 1];
     last_sent_idx = WINDOW_SIZE - 1;
 
+    int packet_ctr = 0;
+
     while (1)
     {
         // If there's any space in our window, fill it up with packets
         if (space_left(last_unacked_idx, last_sent_idx) > 0) {
-            for (size_t i = last_sent_idx; i < WINDOW_SIZE; i++)
+
+            for (size_t i = (last_sent_idx + 1) % WINDOW_SIZE; i != last_unacked_idx; i = (i+1) % WINDOW_SIZE)
             {
                 if (window[i] == NULL) {
                     len = fread(buffer, 1, DATA_SIZE, fp);
@@ -217,57 +239,30 @@ int main (int argc, char **argv)
                 }
             }
 
-            for (size_t i = 0; i < last_unacked_idx; i++)
-            {
-                if (window[i] == NULL) {
-                    len = fread(buffer, 1, DATA_SIZE, fp);
-
-                    if (len <= 0)
-                    {
-                        atEof = true;
-                        break;
-                    }
-                    
-                    sndpkt = make_packet(len);
-                    memcpy(sndpkt->data, buffer, len);
-                    sndpkt->hdr.seqno = next_seqno;
-
-                    next_seqno = next_seqno + len;
-                    
-                    window[i] = sndpkt;
-                }
-            }
-
-            //print_window();
+            // print_window();
 
             // Fork to send all unsent packets and receive acks
             int pid = fork();
 
             if (pid) {
-
-                //printf(" (last_sent_idx + 1)mod WINDOW_SIZE: %d ; last_unacked_idx: %d \n", (last_sent_idx + 1) % WINDOW_SIZE, last_unacked_idx);
+                
                 for (size_t i = (last_sent_idx + 1) % WINDOW_SIZE; i != last_unacked_idx; i = (i+1) % WINDOW_SIZE)
                 {
-
-                    //window[last_unacked_idx-1]->hdr.seqno < last_sent->hdr.seqno
                     if (window[i] == NULL) continue;
+
                     VLOG(DEBUG, "Sending packet %d to %s", 
-                    window[i]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
+                     window[i]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
                     if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
                     ( const struct sockaddr *)&serveraddr, serverlen) < 0)
                     {
                         error("sendto");
                     }
                 }
-
-                if (atEof) {
-                    sndpkt = make_packet(0);
-                    sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
-                            (const struct sockaddr *)&serveraddr, serverlen);
-                }
                 
                 kill(pid, SIGKILL);
             }
+
+            packet_ctr += space_left(last_unacked_idx, last_sent_idx);
 
             last_sent_idx = ((last_unacked_idx-1) + WINDOW_SIZE) % WINDOW_SIZE;
             last_sent = window[last_sent_idx];
@@ -292,10 +287,37 @@ int main (int argc, char **argv)
 
         stop_timer();
 
-        // printf("maxAck: %d; next_seqno: %d;\n",maxAck,next_seqno);
         if (atEof && maxAck == next_seqno) {
-            VLOG(INFO, "End Of File has been reached");
+            sndpkt = make_packet(0);
+            sndpkt->hdr.ctr_flags = END;
+            sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
+                    (const struct sockaddr *)&serveraddr, serverlen);
+
+            last_unacked = sndpkt;
+            last_unacked_idx = 0;
+            last_sent_idx = 0;
+
+            int num_tries = 0;
+
+            start_timer();
+
+            do {
+                if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
+                (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
+                {
+                    error("recvfrom");
+                }
+
+                recvpkt = (tcp_packet *)buffer;
+                assert(get_data_size(recvpkt) <= DATA_SIZE);
+
+                num_tries++;
+            } while (recvpkt->hdr.ctr_flags != END);
+
+            stop_timer();
+            VLOG(INFO, "FIN received. End Of File has been reached");
             break;
+            
         }
 
         for (size_t i = 0; i < WINDOW_SIZE; i++)
@@ -304,16 +326,16 @@ int main (int argc, char **argv)
             if (window[i]->hdr.seqno == recvpkt->hdr.ackno) {
                 last_unacked_idx = i;
                 last_unacked = window[i];
-            }
-            if (window[i]->hdr.seqno < recvpkt->hdr.ackno) {
+            } else if (window[i]->hdr.seqno < recvpkt->hdr.ackno) {
                 free(window[i]);
                 window[i] = NULL;
             }
         }
     }
 
-    return 0;
+    fclose(fp);
 
+    return 0;
 }
 
 
