@@ -70,11 +70,13 @@ void resend_packets(int sig)
 
         // VLOG(DEBUG, "Retry sending packet %d to %s", 
         //         last_unacked->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
-        if(sendto(sockfd, last_unacked, TCP_HDR_SIZE + get_data_size(last_unacked), 0, 
-        ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-        {
-            error("sendto");
-        }
+        if (last_unacked != NULL) {
+		if(sendto(sockfd, last_unacked, TCP_HDR_SIZE + get_data_size(last_unacked), 0,
+       		 ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+        	{
+            		error("sendto");
+        	}
+	}
 
         for (size_t i = (last_unacked_idx+1)%WINDOW_SIZE; i != (last_sent_idx+1)%WINDOW_SIZE; i = (i+1) % WINDOW_SIZE)
         {
