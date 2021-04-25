@@ -33,6 +33,7 @@ tcp_packet *recvpkt;
 sigset_t sigmask;       
 tcp_packet* window[WINDOW_SIZE] = {NULL};
 int packetsInWindow = 0;
+int ackCtr = 0;
 
 tcp_packet* last_unacked;
 int last_unacked_idx;
@@ -66,30 +67,31 @@ void resend_packets(int sig)
     {
         //Resend all packets range between 
         //sendBase and nextSeqNum
-        if (last_unacked->hdr.ctr_flags != END) VLOG(INFO, "Timeout happened");
+        if (last_unacked->hdr.ctr_flags != END) VLOG(INFO, "Resending packets.");
 
         // VLOG(DEBUG, "Retry sending packet %d to %s", 
         //         last_unacked->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
         if (last_unacked != NULL) {
-		if(sendto(sockfd, last_unacked, TCP_HDR_SIZE + get_data_size(last_unacked), 0,
+            printf("Resending: %d\n",last_unacked->hdr.seqno);
+		    if(sendto(sockfd, last_unacked, TCP_HDR_SIZE + get_data_size(last_unacked), 0,
        		 ( const struct sockaddr *)&serveraddr, serverlen) < 0)
         	{
             		error("sendto");
         	}
-	}
+	    }
 
-        for (size_t i = (last_unacked_idx+1)%WINDOW_SIZE; i != (last_sent_idx+1)%WINDOW_SIZE; i = (i+1) % WINDOW_SIZE)
-        {
-            if (window[i] == NULL) continue;
+        // for (size_t i = (last_unacked_idx+1)%WINDOW_SIZE; i != (last_sent_idx+1)%WINDOW_SIZE; i = (i+1) % WINDOW_SIZE)
+        // {
+        //     if (window[i] == NULL) continue;
 
-            VLOG(DEBUG, "Retry sending packet %d to %s\n", 
-                window[i]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
-            if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
-            ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-            {
-                error("sendto");
-            }
-        }
+        //     VLOG(DEBUG, "Retry sending packet %d to %s\n", 
+        //         window[i]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
+        //     if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
+        //     ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+        //     {
+        //         error("sendto");
+        //     }
+        // }
     }
 }
 
@@ -213,13 +215,13 @@ int main (int argc, char **argv)
     last_sent = window[WINDOW_SIZE - 1];
     last_sent_idx = WINDOW_SIZE - 1;
 
-    int packet_ctr = 0;
 
     while (1)
     {
         // If there's any space in our window, fill it up with packets
         if (space_left(last_unacked_idx, last_sent_idx) > 0) {
 
+            // Going from last sent to last unacked (equals space in window) and filling + sending
             for (size_t i = (last_sent_idx + 1) % WINDOW_SIZE; i != last_unacked_idx; i = (i+1) % WINDOW_SIZE)
             {
                 if (window[i] == NULL) {
@@ -252,6 +254,11 @@ int main (int argc, char **argv)
                 {
                     if (window[i] == NULL) continue;
 
+                    // if (window[i]->hdr.seqno % 5 == 0) {
+                    //     printf("Dropping packet %d\n", window[i]->hdr.seqno);
+                    //     continue;
+                    // }
+
                     VLOG(DEBUG, "Sending packet %d to %s", 
                      window[i]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
                     if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
@@ -263,8 +270,6 @@ int main (int argc, char **argv)
                 
                 kill(pid, SIGKILL);
             }
-
-            packet_ctr += space_left(last_unacked_idx, last_sent_idx);
 
             last_sent_idx = ((last_unacked_idx-1) + WINDOW_SIZE) % WINDOW_SIZE;
             last_sent = window[last_sent_idx];
@@ -281,10 +286,25 @@ int main (int argc, char **argv)
             }
 
             recvpkt = (tcp_packet *)buffer;
-            assert(get_data_size(recvpkt) <= DATA_SIZE);   
+            assert(get_data_size(recvpkt) <= DATA_SIZE); 
 
-            if (recvpkt->hdr.ackno > maxAck) maxAck = recvpkt->hdr.ackno;
+            printf("Got ACK: %d\n", recvpkt->hdr.ackno);
 
+            if (recvpkt->hdr.ackno == maxAck) {
+                ackCtr++;
+                if (ackCtr == 3) {
+                    stop_timer();
+                    printf("got 3 duplicates\n");
+                    resend_packets(SIGALRM);
+                    ackCtr = 0;
+                    start_timer();
+                }
+            }
+
+            if (recvpkt->hdr.ackno > maxAck) {
+                maxAck = recvpkt->hdr.ackno;
+                ackCtr = 0;
+            }
         } while (recvpkt->hdr.ackno < last_unacked->hdr.seqno);
 
         stop_timer();
@@ -319,7 +339,6 @@ int main (int argc, char **argv)
             stop_timer();
             VLOG(INFO, "FIN received. End Of File has been reached");
             break;
-            
         }
 
         for (size_t i = 0; i < WINDOW_SIZE; i++)

@@ -8,10 +8,29 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #include "common.h"
 #include "packet.h"
 
+// Max. Bandwidth = 30 Mb/s
+// RTT = 10 ms 
+// Buffer = 30*10^6 * 10*10^-3 * 2 for safety = 600,000
+#define RECV_BUFFER_SIZE (600000/DATA_SIZE)
+
+void print_buffer(tcp_packet* recv_buffer[]) {
+    for (size_t i = 0; i < RECV_BUFFER_SIZE; i++)
+    {
+        printf("[%zu: ", i);
+        if (recv_buffer[i] == NULL) {
+            printf("NULL");
+        } else {
+            printf("%d",recv_buffer[i]->hdr.seqno);
+        }
+        printf("]");
+    }
+    printf("\n");
+}
 
 /*
  * You are required to change the implementation to support
@@ -32,6 +51,8 @@ int main(int argc, char **argv) {
     FILE *fp;
     char buffer[MSS_SIZE];
     struct timeval tp;
+
+    tcp_packet* recv_buffer[RECV_BUFFER_SIZE] = {NULL};
 
     /* 
      * check command line arguments 
@@ -85,27 +106,29 @@ int main(int argc, char **argv) {
 
     clientlen = sizeof(clientaddr);
 
-    int rcv_base = 0;
+    
 
     printf("Waiting for files\n");
+
+    int exp_seqno = 0;
+    int recv_base_idx = RECV_BUFFER_SIZE - 1;
 
     while (1) {
         /*
          * recvfrom: receive a UDP datagram from a client
          */
 
+        // printf("0\n");
+        // print_buffer(recv_buffer);
+        // printf("recv base idx: %d\n", recv_base_idx);
+
         //VLOG(DEBUG, "waiting from server \n");
         if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
                 (struct sockaddr *) &clientaddr, (socklen_t *)&clientlen) < 0) {
-            error("ERROR in recvfrom");
+            error("ERROR in recvfrom\n");
         }
 
         recvpkt = (tcp_packet *) buffer;
-
-        if (get_data_size(recvpkt) > DATA_SIZE) {
-            printf("size: %d\n", get_data_size(recvpkt));
-            printf("seqno: %d, data size: %d\n", recvpkt->hdr.seqno, recvpkt->hdr.data_size);
-        }
 
         assert(get_data_size(recvpkt) <= DATA_SIZE);
 
@@ -113,7 +136,7 @@ int main(int argc, char **argv) {
             VLOG(INFO, "End Of File has been reached");
 
             sndpkt = make_packet(0);
-            sndpkt->hdr.ackno = rcv_base;
+            sndpkt->hdr.ackno = exp_seqno;
             sndpkt->hdr.ctr_flags = END;
 
             for (size_t i = 0; i < 10; i++)
@@ -129,13 +152,24 @@ int main(int argc, char **argv) {
             break;
         }
 
-        if (recvpkt->hdr.seqno < rcv_base) {
+        if (recvpkt->hdr.seqno < exp_seqno) {
+            // printf("less than exp_seqno: %d\n", recvpkt->hdr.seqno);
             continue;
         }
 
-        if (recvpkt->hdr.seqno > rcv_base) {
+        if (recvpkt->hdr.seqno > exp_seqno) {
+
+            if (recvpkt->hdr.seqno <= exp_seqno + DATA_SIZE*(RECV_BUFFER_SIZE - 1)) {
+
+                int pack_idx = (((recvpkt->hdr.seqno - exp_seqno) / DATA_SIZE) + recv_base_idx) % RECV_BUFFER_SIZE;
+
+                recv_buffer[pack_idx] = (tcp_packet*)malloc(TCP_HDR_SIZE + recvpkt->hdr.data_size); 
+                memcpy(recv_buffer[pack_idx]->data, recvpkt->data, recvpkt->hdr.data_size);
+                recv_buffer[pack_idx]->hdr = recvpkt->hdr;
+            }
+
             sndpkt = make_packet(0);
-            sndpkt->hdr.ackno = rcv_base;
+            sndpkt->hdr.ackno = exp_seqno;
             sndpkt->hdr.ctr_flags = ACK;
 
             if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
@@ -143,26 +177,63 @@ int main(int argc, char **argv) {
                 error("ERROR in sendto");
             }
             
-            printf("Sending ack for %d\n", rcv_base);
+            // printf("greater than exp seq number: %d, sending ack for %d\n", recvpkt->hdr.seqno, exp_seqno);
 
             continue;
         }
 
         /*
          * sendto: ACK back to the client 
-         */
-        gettimeofday(&tp, NULL);
-        VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
+        //  */
+        // gettimeofday(&tp, NULL);
+        // VLOG(DEBUG, "%lu, %d, %d\n", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
 
         fseek(fp, recvpkt->hdr.seqno, SEEK_SET);
+        printf("writing: %d\n", recvpkt->hdr.seqno);
         fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
 
+        // printf("1\n");
+        // print_buffer(recv_buffer);
+
+        tcp_packet* to_write = recv_buffer[(recv_base_idx+1)%RECV_BUFFER_SIZE];
+
+        int last_written_seqno = recvpkt->hdr.seqno;
+        int last_written_data_size = recvpkt->hdr.data_size;
+
+        bool entered_loop = false;
+
+        while (to_write != NULL) 
+        {
+            fseek(fp, to_write->hdr.seqno, SEEK_SET);
+            printf("writing from buffer: %d\n",to_write->hdr.seqno);
+            fwrite(to_write->data, 1, to_write->hdr.data_size, fp);
+
+            last_written_seqno = to_write->hdr.seqno;
+            last_written_data_size = to_write->hdr.data_size;
+
+            free(recv_buffer[(recv_base_idx+1)%RECV_BUFFER_SIZE]);
+
+            recv_buffer[(recv_base_idx+1)%RECV_BUFFER_SIZE] = NULL;
+
+            recv_base_idx = (recv_base_idx+1)%RECV_BUFFER_SIZE;
+
+            to_write = recv_buffer[(recv_base_idx+1)%RECV_BUFFER_SIZE];
+
+            entered_loop = true;
+        }
+
+        if (entered_loop) recv_base_idx = (recv_base_idx+1)%RECV_BUFFER_SIZE;
+
         sndpkt = make_packet(0);
-        rcv_base = rcv_base + recvpkt->hdr.data_size;
-        sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
+        exp_seqno = last_written_seqno + last_written_data_size;
+        sndpkt->hdr.ackno = exp_seqno;
         sndpkt->hdr.ctr_flags = ACK;
 
-        printf("Acknum: %d\n", sndpkt->hdr.ackno);
+        printf("expecting: %d\n",exp_seqno);
+
+        // printf("Acking: %d\n", sndpkt->hdr.ackno);
+        // printf("2\n");
+        // print_buffer(recv_buffer);
 
         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                 (struct sockaddr *) &clientaddr, clientlen) < 0) {
