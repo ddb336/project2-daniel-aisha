@@ -36,6 +36,7 @@ int packetsInWindow = 0;
 int ackCtr = 0;
 
 FILE *fp;
+long int file_size;
 
 long int last_unacked;
 long int last_sent;
@@ -145,6 +146,10 @@ int main (int argc, char **argv)
     if (fp == NULL) {
         error(argv[3]);
     }
+
+    fseek(fp, 0L, SEEK_END);
+    file_size = ftell(fp);
+    fseek(fp, 0L, SEEK_SET);
 
     /* socket: create the socket */
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -273,7 +278,11 @@ int main (int argc, char **argv)
 
         if (len <= 0) atEof = true;
 
-        if (atEof && next_seqno >= maxAck) {
+        if (atEof && maxAck >= file_size) {
+
+            printf("entered eof\n");
+            printf("next_seqno: %d\n",next_seqno);
+
             sndpkt = make_packet(0);
             sndpkt->hdr.ctr_flags = END;
             sendto(sockfd, sndpkt, TCP_HDR_SIZE,  0,
@@ -339,12 +348,11 @@ int main (int argc, char **argv)
         stop_timer();
 
 
-        int space_between = recvpkt->hdr.ackno - last_unacked;
+        int space_between = maxAck - last_unacked;
 
         cwnd += space_between/DATA_SIZE;
 
-        last_unacked = recvpkt->hdr.ackno;
-
+        last_unacked = maxAck;
     }
 
     fclose(fp);
