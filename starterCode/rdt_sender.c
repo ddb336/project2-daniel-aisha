@@ -286,11 +286,11 @@ int main (int argc, char **argv)
                     // memcpy(sndpkt->data, buffer, len);
                     // sndpkt->hdr.seqno = last_sent;
 
-                    if (last_sent == 8736 && !mybool) { mybool = true; continue; }
+                    // if (last_sent == 8736 && !mybool) { mybool = true; continue; }
 
-                    if (last_sent == 815360 && !mybool) { mybool = true; continue; }
+                    // if (last_sent == 815360 && !mybool) { mybool = true; continue; }
 
-                    if (last_sent == 347984 && !mybool) { mybool = true; continue; }
+                    // if (last_sent == 347984 && !mybool) { mybool = true; continue; }
 
                     //VLOG(DEBUG, "Sending packet %d to %s", 
                      //  window[ctr]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));

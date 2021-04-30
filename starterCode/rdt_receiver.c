@@ -18,8 +18,10 @@
 // Buffer = 30*10^6 * 10*10^-3 * 2 for safety = 600,000
 #define RECV_BUFFER_SIZE (600000/DATA_SIZE)
 
+int recv_base_idx;
+
 void print_buffer(tcp_packet* recv_buffer[]) {
-    for (size_t i = 0; i < RECV_BUFFER_SIZE; i++)
+    for (size_t i = recv_base_idx; i != (recv_base_idx+10)%RECV_BUFFER_SIZE; i = (i + 1)%RECV_BUFFER_SIZE)
     {
         printf("[%zu: ", i);
         if (recv_buffer[i] == NULL) {
@@ -110,7 +112,7 @@ int main(int argc, char **argv) {
     printf("Waiting for files\n");
 
     int exp_seqno = 0;
-    int recv_base_idx = RECV_BUFFER_SIZE - 1;
+    recv_base_idx = RECV_BUFFER_SIZE - 1;
 
     while (1) {
         /*
@@ -135,6 +137,8 @@ int main(int argc, char **argv) {
 
         assert(get_data_size(recvpkt) <= DATA_SIZE);
 
+        printf("Received: %d\n",recvpkt->hdr.seqno);
+
         if (recvpkt->hdr.data_size == 0) {
             VLOG(INFO, "End Of File has been reached");
 
@@ -153,7 +157,6 @@ int main(int argc, char **argv) {
             }
 
             printf("Numpacks: %d",numpacks);
-
 
             fclose(fp);
             close(sockfd);
@@ -181,23 +184,34 @@ int main(int argc, char **argv) {
 
             if (recvpkt->hdr.seqno <= exp_seqno + DATA_SIZE*(RECV_BUFFER_SIZE - 1)) {
 
-                printf("Writing to buffer: %d\n",recvpkt->hdr.seqno);
-
                 int pack_idx = (((recvpkt->hdr.seqno - exp_seqno) / DATA_SIZE) + recv_base_idx) % RECV_BUFFER_SIZE;
 
-                recv_buffer[pack_idx] = (tcp_packet*)malloc(TCP_HDR_SIZE + recvpkt->hdr.data_size); 
-                memcpy(recv_buffer[pack_idx]->data, recvpkt->data, recvpkt->hdr.data_size);
-                recv_buffer[pack_idx]->hdr = recvpkt->hdr;
+                if (recv_buffer[pack_idx] == NULL) {
+                    printf("Writing to buffer: %d\n",recvpkt->hdr.seqno);
+                    recv_buffer[pack_idx] = (tcp_packet*)malloc(TCP_HDR_SIZE + recvpkt->hdr.data_size); 
+                    memcpy(recv_buffer[pack_idx]->data, recvpkt->data, recvpkt->hdr.data_size);
+                    recv_buffer[pack_idx]->hdr = recvpkt->hdr;
+                    printf("Wrote to buffer\n");
+                }
             }
+
+            printf("Before sending ack\n");
 
             sndpkt = make_packet(0);
             sndpkt->hdr.ackno = exp_seqno;
             sndpkt->hdr.ctr_flags = ACK;
 
+            printf("Just before sending ack\n");
+
             if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                     (struct sockaddr *) &clientaddr, clientlen) < 0) {
                 error("ERROR in sendto");
             }
+
+            printf("HERE\n");
+
+            printf("Recv base: %d", recv_base_idx);
+            print_buffer(recv_buffer);
             
             continue;
         }
@@ -229,13 +243,15 @@ int main(int argc, char **argv) {
 
         while (to_write != NULL) 
         {
-            fseek(fp, to_write->hdr.seqno, SEEK_SET);
-            printf("buffer ftell at: %ld\n",ftell(fp));
-            printf("writing from buffer: %d\n",to_write->hdr.seqno);
-            fwrite(to_write->data, 1, to_write->hdr.data_size, fp);
-
-            last_written_seqno = to_write->hdr.seqno;
-            last_written_data_size = to_write->hdr.data_size;
+            if (to_write->hdr.seqno >= exp_seqno) {
+                fseek(fp, to_write->hdr.seqno, SEEK_SET);
+                printf("buffer ftell at: %ld\n",ftell(fp));
+                printf("writing from buffer: %d\n",to_write->hdr.seqno);
+                fwrite(to_write->data, 1, to_write->hdr.data_size, fp);
+                
+                last_written_seqno = to_write->hdr.seqno;
+                last_written_data_size = to_write->hdr.data_size;
+            }
 
             free(recv_buffer[(recv_base_idx+1)%RECV_BUFFER_SIZE]);
 
@@ -258,6 +274,7 @@ int main(int argc, char **argv) {
         // printf("expecting: %d\n",exp_seqno);
 
         printf("Acking: %d\n", sndpkt->hdr.ackno);
+        recv_base_idx = (recv_base_idx+1)%RECV_BUFFER_SIZE;
         // printf("2\n");
         // print_buffer(recv_buffer);
 
