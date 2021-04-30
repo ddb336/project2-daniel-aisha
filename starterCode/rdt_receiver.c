@@ -53,8 +53,6 @@ int main(int argc, char **argv) {
 
     int numpacks = 0;
 
-    struct timeval tp;
-
     tcp_packet* recv_buffer[RECV_BUFFER_SIZE] = {NULL};
 
     /* 

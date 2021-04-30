@@ -57,12 +57,12 @@ void resend_packets(int sig)
      //    //         last_unacked->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
      //    if (last_unacked != NULL) {
      //        printf("Resending: %d\n",last_unacked->hdr.seqno);
-		   //  if(sendto(sockfd, last_unacked, TCP_HDR_SIZE + get_data_size(last_unacked), 0,
-     //   		 ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-     //    	{
-     //        		error("sendto");
-     //    	}
-	    // }
+           //  if(sendto(sockfd, last_unacked, TCP_HDR_SIZE + get_data_size(last_unacked), 0,
+     //          ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+     //     {
+     //             error("sendto");
+     //     }
+        // }
 
         // printf("Max ack: %ld",maxAck);
 
@@ -138,7 +138,7 @@ int space_left(int last_unacked_idx, int last_sent_idx) {
 
 int main (int argc, char **argv)
 {
-    int portno, len, seek;
+    int portno, len;
     char *hostname;
 
     /* check command line arguments */
@@ -230,7 +230,7 @@ int main (int argc, char **argv)
         int ctr = 0;
 
         while (last_sent < file_size && ctr < cwnd - in_flight_packets) {
-            seek = fseek(fp, last_sent, SEEK_SET);
+            fseek(fp, last_sent, SEEK_SET);
             len = fread(buffer, 1, DATA_SIZE, fp);
 
             window[ctr] = make_packet(len);
@@ -399,7 +399,7 @@ int main (int argc, char **argv)
         stop_timer();
 
         // Previous last unacked
-        int space_between = maxAck - last_unacked;
+       // int space_between = maxAck - last_unacked;
         // printf("maxAck: %ld\n", maxAck);
         // printf("last_unacked: %ld\n", last_unacked);
         // printf("space between: %d\n", space_between);
