@@ -58,7 +58,7 @@ void resend_packets(int sig)
 
         printf("Resending: %d\n", sndpkt->hdr.seqno);
         if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0,
-         ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+         (const struct sockaddr *)&serveraddr, serverlen) < 0)
         {
                 error("sendto");
         }
@@ -183,6 +183,9 @@ int main (int argc, char **argv)
 
    // ------------------------------------------------ //
 
+    FILE* cwnd_output = fopen("output.csv","w");
+    setbuf(cwnd_output, NULL);
+
     while (1)
     {
 
@@ -191,7 +194,8 @@ int main (int argc, char **argv)
         if (last_unacked > last_sent) in_flight_packets = 0;
         else in_flight_packets = ((last_sent - last_unacked) / DATA_SIZE) + 1;
 
-        printf("cwnd: %f; last_sent: %ld; last_unacked: %ld, ifp: %ld, fp at: %ld\n", cwnd, last_sent, last_unacked, in_flight_packets, ftell(fp));
+        fprintf(cwnd_output,"%f,%f\n", (float)clock()/(float)CLOCKS_PER_SEC, cwnd);
+        printf("%f,%f\n",cwnd,(float)clock()/(float)CLOCKS_PER_SEC);
 
         int ctr = 0;
 
@@ -216,12 +220,11 @@ int main (int argc, char **argv)
             if (pid == 0) 
             {
                 int ctr = 0;
-                bool mybool = false;
 
                 while (in_flight_packets < cwnd) 
                 {
                     in_flight_packets++;
-                    
+
                     // VLOG(DEBUG, "Sending packet %d to %s", 
                     //   window[ctr]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
                     if(sendto(sockfd, window[ctr], TCP_HDR_SIZE + get_data_size(window[ctr]), 0, 
@@ -313,13 +316,13 @@ int main (int argc, char **argv)
             cwnd += 1;
         }
 
-
         if (ceil(cwnd) - cwnd < 0.00001) cwnd = ceil(cwnd);
 
         last_unacked = maxAck;
     }
 
     fclose(fp);
+    fclose(cwnd_output);
 
     return 0;
 }
