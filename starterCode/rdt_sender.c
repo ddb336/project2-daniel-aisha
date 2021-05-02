@@ -49,23 +49,6 @@ void resend_packets(int sig)
 {
     if (sig == SIGALRM)
     {
-        //Resend all packets range between 
-        //sendBase and nextSeqNum
-     //    if (last_unacked->hdr.ctr_flags != END) VLOG(INFO, "Resending packets.");
-
-     //    // VLOG(DEBUG, "Retry sending packet %d to %s", 
-     //    //         last_unacked->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
-     //    if (last_unacked != NULL) {
-     //        printf("Resending: %d\n",last_unacked->hdr.seqno);
-           //  if(sendto(sockfd, last_unacked, TCP_HDR_SIZE + get_data_size(last_unacked), 0,
-     //          ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-     //     {
-     //             error("sendto");
-     //     }
-        // }
-
-        // printf("Max ack: %ld",maxAck);
-
         fseek(fp, maxAck, SEEK_SET);
         int len = fread(buffer, 1, DATA_SIZE, fp);
 
@@ -81,20 +64,7 @@ void resend_packets(int sig)
         }
 
         ssthresh = (cwnd/2 > 2 ? cwnd/2 : 2);
-        cwnd = 1.0;
-
-        // for (size_t i = (last_unacked_idx+1)%WINDOW_SIZE; i != (last_sent_idx+1)%WINDOW_SIZE; i = (i+1) % WINDOW_SIZE)
-        // {
-        //     if (window[i] == NULL) continue;
-
-        //     VLOG(DEBUG, "Retry sending packet %d to %s\n", 
-        //         window[i]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
-        //     if(sendto(sockfd, window[i], TCP_HDR_SIZE + get_data_size(window[i]), 0, 
-        //     ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-        //     {
-        //         error("sendto");
-        //     }
-        // }
+        cwnd = 0.0;
     }
 }
 
@@ -216,14 +186,10 @@ int main (int argc, char **argv)
     while (1)
     {
 
-        // printf("Last sent: %ld; last unacked: %ld;\n",last_sent,last_unacked);
-
         long int in_flight_packets;
 
         if (last_unacked > last_sent) in_flight_packets = 0;
         else in_flight_packets = ((last_sent - last_unacked) / DATA_SIZE) + 1;
-
-        // printf("Ifp: %ld;\n",in_flight_packets);
 
         printf("cwnd: %f; last_sent: %ld; last_unacked: %ld, ifp: %ld, fp at: %ld\n", cwnd, last_sent, last_unacked, in_flight_packets, ftell(fp));
 
@@ -242,10 +208,6 @@ int main (int argc, char **argv)
             ctr++;
         }
 
-        // printf("last_sent: %ld; file_size: %ld;\n",last_sent,file_size);
-
-        // fseek(fp, last_sent, SEEK_SET);
-
         ftell(fp);
 
         if (!atEof) {
@@ -253,55 +215,21 @@ int main (int argc, char **argv)
 
             if (pid == 0) 
             {
-                // if (last_sent >= file_size) return 0;
                 int ctr = 0;
-                // printf("Iterating through send with ifp=%ld, cwnd=%ld:\n",in_flight_packets,cwnd);
                 bool mybool = false;
 
                 while (in_flight_packets < cwnd) 
                 {
-                    // printf("Iteration: %ld\n", in_flight_packets);
                     in_flight_packets++;
                     
-                    // last_sent += DATA_SIZE;
-
-                    // seek = fseek(fp, last_sent, SEEK_SET);
-
-                    // // printf("ftell sender: %ld\n", ftell(fp));
-
-                    // // if (seek != 0)
-                    // // {
-                    // //     printf("seek error!\n");
-                    // // }
-
-                    // len = fread(buffer, 1, DATA_SIZE, fp);
-
-                    // if (len <= 0)
-                    // {
-                    //     atEof = true;
-                    //     break;
-                    // }
-
-                    // sndpkt = make_packet(len);
-                    // memcpy(sndpkt->data, buffer, len);
-                    // sndpkt->hdr.seqno = last_sent;
-
-                    // if (last_sent == 8736 && !mybool) { mybool = true; continue; }
-
-                    // if (last_sent == 815360 && !mybool) { mybool = true; continue; }
-
-                    // if (last_sent == 347984 && !mybool) { mybool = true; continue; }
-
-                    //VLOG(DEBUG, "Sending packet %d to %s", 
-                     //  window[ctr]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
+                    // VLOG(DEBUG, "Sending packet %d to %s", 
+                    //   window[ctr]->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
                     if(sendto(sockfd, window[ctr], TCP_HDR_SIZE + get_data_size(window[ctr]), 0, 
                     ( const struct sockaddr *)&serveraddr, serverlen) < 0)
                     {
                         error("sendto");
                     }ctr++;
                 }
-
-                //printf("Sent %d packets in this process.\n",ctr);
 
                 return 0;
             }
@@ -310,21 +238,8 @@ int main (int argc, char **argv)
         if (last_sent == file_size) {
             atEof = true;
         }
-        // int ctr = 0;
-
-        // while (len > 0 && ctr < cwnd - in_flight_packets) {
-        //     // seek = fseek(fp, last_sent, SEEK_SET);
-        //     len = fread(buffer, 1, DATA_SIZE, fp);
-        //     last_sent += len;
-        //     ctr++;
-        // }
-
-        // if (len <= 0) atEof = true;
 
         if (atEof && maxAck >= file_size) {
-
-            // printf("entered eof\n");
-            // printf("next_seqno: %d\n",next_seqno);
 
             sndpkt = make_packet(0);
             sndpkt->hdr.ctr_flags = END;
@@ -371,8 +286,6 @@ int main (int argc, char **argv)
             assert(get_data_size(recvpkt) <= DATA_SIZE); 
 
             receivedAck = recvpkt->hdr.ackno;
-    
-            //printf("Got ACK: %ld at time: %ld\n", receivedAck, time(0));
 
             if (receivedAck == maxAck) {
                 ackCtr++;
@@ -389,32 +302,19 @@ int main (int argc, char **argv)
                 maxAck = receivedAck;
                 ackCtr = 0;
             }
-
-            //printf("receivedAck: %ld\n", receivedAck);
-            //printf("last_unacked: %ld\n", last_unacked);
-
             
         } while (receivedAck <= last_unacked && receivedAck != file_size);
 
         stop_timer();
 
-        // Previous last unacked
-       // int space_between = maxAck - last_unacked;
-        // printf("maxAck: %ld\n", maxAck);
-        // printf("last_unacked: %ld\n", last_unacked);
-        // printf("space between: %d\n", space_between);
+        if (cwnd >= ssthresh) {
+            cwnd += 1.0/(float)floor(cwnd);
+        } else {
+            cwnd += 1;
+        }
 
-        // if (cwnd < 20) {
-            if (cwnd >= ssthresh) {
-                cwnd += 1.0/(float)floor(cwnd);
-            } else {
-                cwnd += 1;
-            }
-        // }
 
         if (ceil(cwnd) - cwnd < 0.00001) cwnd = ceil(cwnd);
-
-        //printf("cwnd: %f, ssthresh: %d, space: %ld \n", cwnd, ssthresh, last_sent - last_unacked);
 
         last_unacked = maxAck;
     }
