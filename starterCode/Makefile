@@ -8,7 +8,7 @@ SHELL = /bin/bash
 # compiling flags here
 CFLAGS = -Wall -I -lm
 
-LINKER = gcc -o
+LINKER = gcc -pthread -o
 # linking flags here
 LFLAGS   = -Wall
 
