@@ -39,5 +39,7 @@ The output will be stored to a csv file called cwnd_output.csv. It will contain 
 
 ## Meme:
 
+While the project was educational and fun, we spent a lot of time and effort on it. This meme is a tribute to our struggle. 
+
 ![](images/meme.jpg)
 
