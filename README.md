@@ -19,6 +19,6 @@ You can add delay (mm-delay <amount in ms>) or packet loss (mm-loss uplink/downl
 
 Images:
 
-![](https://raw.githubusercontent.com/ddb336/project2-daniel-aisha/main/images/1.png)
+![](images/1.png)
 
 
