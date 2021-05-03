@@ -21,8 +21,6 @@
 #define RETRY  120 //milli second 
 #define WINDOW_SIZE 10
 
-int next_seqno = 0;
-int send_base = 0;
 long int maxAck = 0;
 
 char buffer[DATA_SIZE];
@@ -33,8 +31,6 @@ struct itimerval timer;
 tcp_packet *sndpkt;
 tcp_packet *recvpkt = NULL;
 sigset_t sigmask;       
-tcp_packet* window[WINDOW_SIZE] = {NULL};
-int packetsInWindow = 0;
 int ackCtr = 0;
 int portno, len;
 
@@ -48,6 +44,10 @@ float cwnd = 1.0;
 long int in_flight_packets = 0;
 int ssthresh = 64;
 
+/*
+ * This function send the last unacked packet if we get three duplicate acks 
+ * or a timeout.
+ */
 void resend_packets(int sig)
 {
     if (sig == SIGALRM)
@@ -61,7 +61,6 @@ void resend_packets(int sig)
         memcpy(sndpkt2->data, buffer, len);
         sndpkt2->hdr.seqno = maxAck;
 
-        printf("Resending: %d\n", sndpkt2->hdr.seqno);
         if(sendto(sockfd, sndpkt2, TCP_HDR_SIZE + get_data_size(sndpkt2), 0,
          ( const struct sockaddr *)&serveraddr, serverlen) < 0)
         {
@@ -102,22 +101,20 @@ void init_timer(int delay, void (*sig_handler)(int))
     sigaddset(&sigmask, SIGALRM);
 }
 
-int space_left(int last_unacked_idx, int last_sent_idx) {
-    if (last_unacked_idx > last_sent_idx) {
-        return last_unacked_idx - last_sent_idx - 1;
-    } else {
-        return WINDOW_SIZE - (last_sent_idx - last_unacked_idx + 1);
-    }
-}
-
+/*
+ * Arguments to be passed in to the sending thread
+ */
 struct threadArgs {
     pthread_t previous_thread;
-    int thread_num;
     FILE* read_ptr;
 };
 
+/*
+ * Function to send packets - used as part of threading
+ */
 void *send_packets(void *input) {
 
+    // This blocks the thread until the previous thread is done executing
     if (((struct threadArgs*) input)->previous_thread != NULL) {
         pthread_join(((struct threadArgs*) input)->previous_thread, NULL);
     }
@@ -136,8 +133,6 @@ void *send_packets(void *input) {
         thread_send = make_packet(len);
         memcpy(thread_send->data, sendBuffer, len);
         thread_send->hdr.seqno = last_sent;
-
-        printf("Thread %d sending packet %d\n",((struct threadArgs*) input)->thread_num, thread_send->hdr.seqno);
 
         if(sendto(sockfd, thread_send, TCP_HDR_SIZE + get_data_size(thread_send), 0, 
         ( const struct sockaddr *)&serveraddr, serverlen) < 0)
@@ -160,7 +155,7 @@ int main (int argc, char **argv)
 
     /* check command line arguments */
     if (argc != 4) {
-        //fprintf(stderr,"usage: %s <hostname> <port> <FILE>\n", argv[0]);
+        fprintf(stderr,"usage: %s <hostname> <port> <FILE>\n", argv[0]);
         exit(0);
     }
     hostname = argv[1];
@@ -195,17 +190,13 @@ int main (int argc, char **argv)
     serveraddr.sin_port = htons(portno);
 
     assert(MSS_SIZE - TCP_HDR_SIZE > 0);
-
-    //Stop and wait protocol
-
-    //RETRY
+    
     init_timer(300, resend_packets);
-
-    next_seqno = 0;
 
     bool atEof = false;
 
-    // ------------------------------------------------ //
+    // In this part, we read a packet from the file and send it, to initialize
+    // our sending window.
 
     len = fread(buffer, 1, DATA_SIZE, fp);
 
@@ -216,7 +207,7 @@ int main (int argc, char **argv)
 
     sndpkt = make_packet(len);
     memcpy(sndpkt->data, buffer, len);
-    sndpkt->hdr.seqno = next_seqno;
+    sndpkt->hdr.seqno = 0;
 
     VLOG(DEBUG, "Sending packet %d to %s", 
          sndpkt->hdr.seqno, inet_ntoa(serveraddr.sin_addr));
@@ -228,36 +219,29 @@ int main (int argc, char **argv)
 
     last_sent = last_unacked = 0;
 
-   // ------------------------------------------------ //
-
+    // Making a file to save the cwnd and in flight packets to a csv
     FILE* cwnd_fp = fopen("cwnd_output.csv","w");
     setbuf(cwnd_fp, NULL);
-
-    int process_num = 1;
+    fprintf(cwnd_fp, "time_s,cwnd,in_flight_packets\n");
 
     pthread_t thread_id = NULL;
 
     while (1)
     {
-
-        // printf("Last sent: %ld; last unacked: %ld;\n",last_sent,last_unacked);
-
+        // Updating in flight packets
         if (last_unacked > last_sent) in_flight_packets = 0;
         else in_flight_packets = ((last_sent - last_unacked) / DATA_SIZE) + 1;
-
-        // printf("Ifp: %ld;\n",in_flight_packets);
 
         printf("cwnd: %f; last_sent: %ld; last_unacked: %ld, ifp: %ld, fp at: %ld\n", cwnd, last_sent, last_unacked, in_flight_packets, ftell(fp));
 
         ftell(fp);
 
+        // Here we make a thread to send the packets
         if (!atEof && cwnd-in_flight_packets > 0) {
             struct threadArgs *myArgs = (struct threadArgs *)malloc(sizeof(struct threadArgs));
 
             myArgs->previous_thread = thread_id;
-            myArgs->thread_num = process_num;
             myArgs->read_ptr = fp;
-            process_num++;
             
             pthread_create(&thread_id, NULL, send_packets, myArgs);
         }
@@ -266,10 +250,9 @@ int main (int argc, char **argv)
             atEof = true;
         }
 
+        // If at end of file, we send an EOF packet, and wait to receive 
+        // confirmation from the receiver.
         if (atEof && maxAck >= file_size) {
-
-            // printf("entered eof\n");
-            // printf("next_seqno: %d\n",next_seqno);
 
             sndpkt = make_packet(0);
             sndpkt->hdr.ctr_flags = END;
@@ -304,8 +287,8 @@ int main (int argc, char **argv)
 
         long int receivedAck = 0;
 
+        // This loop recieves acks from the receiver
         do {
-
             if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
             (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
             {
@@ -318,13 +301,11 @@ int main (int argc, char **argv)
 
             receivedAck = recvpkt->hdr.ackno;
 
-            //printf("Got ACK: %ld at time: %ld\n", receivedAck, time(0));
-
+            // Three duplicate acks
             if (receivedAck == maxAck) {
                 ackCtr++;
                 if (ackCtr == 3) {
                     stop_timer();
-                    printf("got 3 duplicates\n");
                     start_timer();
                     resend_packets(SIGALRM);
                     ackCtr = 0;
@@ -335,34 +316,28 @@ int main (int argc, char **argv)
                 ackCtr = 0;
             } 
 
-            //printf("receivedAck: %ld\n", receivedAck);
-            //printf("last_unacked: %ld\n", last_unacked);
-
+            // Break out if we get the ack we want
         } while (receivedAck <= last_unacked && receivedAck != file_size);
 
         ackCtr = 0;
 
         stop_timer();
 
-        fprintf(cwnd_fp, "%f,%f,%ld\n",(float)clock()/(float)CLOCKS_PER_SEC,cwnd,in_flight_packets);
+        // A snippet to save cwnd and in flight packets
+        long int temp_in_flight;
+        if (last_unacked > last_sent) temp_in_flight = 0;
+        else temp_in_flight = ((last_sent - last_unacked) / DATA_SIZE) + 1;
+        fprintf(cwnd_fp, "%f,%f,%ld\n",(float)clock()/(float)CLOCKS_PER_SEC,cwnd,temp_in_flight);
 
-        // Previous last unacked
-       // int space_between = maxAck - last_unacked;
-        // printf("maxAck: %ld\n", maxAck);
-        // printf("last_unacked: %ld\n", last_unacked);
-        // printf("space between: %d\n", space_between);
-
-        // if (cwnd < 20) {
-            if (cwnd >= ssthresh) {
-                cwnd += 1.0/(float)floor(cwnd);
-            } else {
-                cwnd += 1;
-            }
-        // }
+        // Here we update cwnd depending on where it is in relation to ssthresh
+        if (cwnd >= ssthresh) {
+            cwnd += 1.0/(float)floor(cwnd);
+        } else {
+            cwnd += 1;
+        }
 
         if (ceil(cwnd) - cwnd < 0.00001) cwnd = ceil(cwnd);
 
-        //printf("cwnd: %f, ssthresh: %d, space: %ld \n", cwnd, ssthresh, last_sent - last_unacked);
         last_unacked = maxAck;
     }
 

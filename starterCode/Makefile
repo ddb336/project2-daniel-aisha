@@ -6,9 +6,9 @@ CC = gcc -c
 SHELL = /bin/bash
 
 # compiling flags here
-CFLAGS = -Wall -I -lm
+CFLAGS = -Wall -w -I -lm
 
-LINKER = gcc -pthread -o
+LINKER = gcc -pthread -w -o
 # linking flags here
 LFLAGS   = -Wall
 
